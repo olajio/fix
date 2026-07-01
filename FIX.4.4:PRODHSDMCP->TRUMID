@@ -1,0 +1,56 @@
+{
+  "_index": "fix_session_schedule",
+  "_id": "FIX.4.4:PRODHSDMCP->TRUMID",
+  "_version": 3,
+  "_source": {
+    "alert_status": "enabled",
+    "end_alert_time": "19:00:00-05:00",
+    "record": {
+      "modified_by": "gsamodivekov@hedgeserv.com",
+      "authentication_type": "TOKEN"
+    },
+    "start_alert_time": "05:02:00-05:00",
+    "target": "FIX.4.4:PRODHSDMCP->TRUMID",
+    "group": [
+      "53001",
+      "53002"
+    ]
+  },
+  "fields": {
+    "alert_status": [
+      "enabled"
+    ],
+    "group.keyword": [
+      "53001",
+      "53002"
+    ],
+    "alert_status.keyword": [
+      "enabled"
+    ],
+    "end_alert_time": [
+      "1970-01-02T00:00:00.000Z"
+    ],
+    "target.keyword": [
+      "FIX.4.4:PRODHSDMCP->TRUMID"
+    ],
+    "start_alert_time": [
+      "1970-01-01T10:02:00.000Z"
+    ],
+    "record.authentication_type": [
+      "TOKEN"
+    ],
+    "record.modified_by": [
+      "gsamodivekov@hedgeserv.com"
+    ],
+    "record.authentication_type.keyword": [
+      "TOKEN"
+    ],
+    "group": [
+      "53001",
+      "53002"
+    ],
+    "target": [
+      "FIX.4.4:PRODHSDMCP->TRUMID"
+    ]
+  }
+}
