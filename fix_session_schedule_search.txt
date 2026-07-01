@@ -1,0 +1,71 @@
+GET fix_session_schedule/_search
+{
+  "size": 0,
+  "query": {
+    "bool": {
+      "filter": [
+        {
+          "term": {
+            "group": "53002"
+          }
+        },
+        {
+          "term": {
+            "alert_status": "enabled"
+          }
+        }
+      ],
+      "must": [
+        {
+          "script": {
+            "script": {
+              "source": """
+                        TimeZone tz = TimeZone.getTimeZone("Europe/Paris");
+                        int paris_offset = tz.getOffset(new Date().getTime()) / 1000 / 60 / 60;  //offset in hrs
+                        // The Z gives you adjusted UTC
+                        def now = LocalDateTime.ofInstant(Instant.ofEpochMilli(new Date().getTime()), ZoneId.of('Z'));
+                        def nowNY = LocalDateTime.ofInstant(Instant.ofEpochMilli(new Date().getTime()), ZoneId.of('America/New_York'));
+                        def nowUTC = LocalDateTime.ofInstant(Instant.ofEpochMilli(new Date().getTime()), ZoneId.of('Z'));
+                        int ny_time_diff = nowUTC.getHour() - nowNY.getHour();
+                        // This is the correct time for the summer daylight savings time
+                        int end_alert_time = doc['end_alert_time'].value.getHour();
+                        int start_alert_time = doc['start_alert_time'].value.getHour();
+                        
+                        if ( paris_offset == 2 ){
+                        // This is the correct time during the winter daylight savings time
+                            end_alert_time = doc['end_alert_time'].value.getHour()-1;
+                            start_alert_time = doc['start_alert_time'].value.getHour()-1;
+                        } else if ( (paris_offset == 1) && (ny_time_diff == 4) ) {
+                            end_alert_time = doc['end_alert_time'].value.getHour()-1;
+                            start_alert_time = doc['start_alert_time'].value.getHour()-1;
+                        }
+                        
+                        if (now.getHour() > start_alert_time && now.getHour() < end_alert_time) {
+                          return true;
+                        } else if (now.getHour() == start_alert_time && start_alert_time == end_alert_time) {
+                          if (now.getMinute() > doc['start_alert_time'].value.getMinute() && now.getMinute() <= doc['end_alert_time'].value.getMinute()) {
+                            return true;
+                          }
+                        } else if (now.getHour() == start_alert_time && doc['start_alert_time'].value.getMinute() < now.getMinute()) {
+                          return true;
+                        } else if (now.getHour() == end_alert_time && doc['end_alert_time'].value.getMinute() >= now.getMinute()) {
+                          return true;
+                        } else {
+                          return false;
+                        }
+                        """
+            }
+          }
+        }
+      ]
+    }
+  },
+  "aggs": {
+    "hosts": {
+      "terms": {
+        "field": "target.keyword",
+        "size": 5000
+      }
+    }
+  }
+}
