@@ -1,0 +1,56 @@
+{
+  "_index": "fix_session_schedule",
+  "_id": "FIX.4.4:PRDHSDMCP->PRDADROITDMCP",
+  "_version": 1,
+  "_source": {
+    "alert_status": "enabled",
+    "end_alert_time": "23:55:00-05:00",
+    "record": {
+      "modified_by": "oolajide@hedgeserv.com",
+      "authentication_type": "TOKEN"
+    },
+    "start_alert_time": "00:02:00-05:00",
+    "target": "FIX.4.4:PRDHSDMCP->PRDADROITDMCP",
+    "group": [
+      "53001",
+      "53002"
+    ]
+  },
+  "fields": {
+    "alert_status": [
+      "enabled"
+    ],
+    "group.keyword": [
+      "53001",
+      "53002"
+    ],
+    "alert_status.keyword": [
+      "enabled"
+    ],
+    "end_alert_time": [
+      "1970-01-02T04:55:00.000Z"
+    ],
+    "target.keyword": [
+      "FIX.4.4:PRDHSDMCP->PRDADROITDMCP"
+    ],
+    "start_alert_time": [
+      "1970-01-01T05:02:00.000Z"
+    ],
+    "record.authentication_type": [
+      "TOKEN"
+    ],
+    "record.modified_by": [
+      "oolajide@hedgeserv.com"
+    ],
+    "record.authentication_type.keyword": [
+      "TOKEN"
+    ],
+    "group": [
+      "53001",
+      "53002"
+    ],
+    "target": [
+      "FIX.4.4:PRDHSDMCP->PRDADROITDMCP"
+    ]
+  }
+}
