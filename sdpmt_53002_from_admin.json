@@ -1,0 +1,417 @@
+{
+  "trigger": {
+    "schedule": {
+      "cron": [
+        "0 */5 * ? * TUE-FRI",
+        "0 */5 0-3 ? * SAT",
+        "0 */5 4-23 ? * MON"
+      ]
+    }
+  },
+  "input": {
+    "chain": {
+      "inputs": [
+        {
+          "groups": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "fix_session_schedule"
+                ],
+                "rest_total_hits_as_int": true,
+                "body": {
+                  "size": 0,
+                  "query": {
+                    "bool": {
+                      "filter": [
+                        {
+                          "term": {
+                            "group": "{{ ctx.metadata.event_type }}"
+                          }
+                        },
+                        {
+                          "term": {
+                            "alert_status": "enabled"
+                          }
+                        }
+                      ],
+                      "must": [
+                        {
+                          "script": {
+                            "script": {
+                              "source": """
+                        TimeZone tz = TimeZone.getTimeZone("Europe/Paris");
+                        int paris_offset = tz.getOffset(new Date().getTime()) / 1000 / 60 / 60;  //offset in hrs
+                        // The Z gives you adjusted UTC
+                        def now = LocalDateTime.ofInstant(Instant.ofEpochMilli(new Date().getTime()), ZoneId.of('Z'));
+                        def nowNY = LocalDateTime.ofInstant(Instant.ofEpochMilli(new Date().getTime()), ZoneId.of('America/New_York'));
+                        def nowUTC = LocalDateTime.ofInstant(Instant.ofEpochMilli(new Date().getTime()), ZoneId.of('Z'));
+                        int ny_time_diff = nowUTC.getHour() - nowNY.getHour();
+                        // This is the correct time for the summer daylight savings time
+                        int end_alert_time = doc['end_alert_time'].value.getHour();
+                        int start_alert_time = doc['start_alert_time'].value.getHour();
+                        
+                        if ( paris_offset == 2 ){
+                        // This is the correct time during the winter daylight savings time
+                            end_alert_time = doc['end_alert_time'].value.getHour()-1;
+                            start_alert_time = doc['start_alert_time'].value.getHour()-1;
+                        } else if ( (paris_offset == 1) && (ny_time_diff == 4) ) {
+                            end_alert_time = doc['end_alert_time'].value.getHour()-1;
+                            start_alert_time = doc['start_alert_time'].value.getHour()-1;
+                        }
+                        
+                        if (now.getHour() > start_alert_time && now.getHour() < end_alert_time) {
+                          return true;
+                        } else if (now.getHour() == start_alert_time && start_alert_time == end_alert_time) {
+                          if (now.getMinute() > doc['start_alert_time'].value.getMinute() && now.getMinute() <= doc['end_alert_time'].value.getMinute()) {
+                            return true;
+                          }
+                        } else if (now.getHour() == start_alert_time && doc['start_alert_time'].value.getMinute() < now.getMinute()) {
+                          return true;
+                        } else if (now.getHour() == end_alert_time && doc['end_alert_time'].value.getMinute() >= now.getMinute()) {
+                          return true;
+                        } else {
+                          return false;
+                        }
+                        """
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "aggs": {
+                    "hosts": {
+                      "terms": {
+                        "field": "target.keyword",
+                        "size": 5000
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "groups_hosts": {
+            "transform": {
+              "script": {
+                "source": """
+                // flatten the list of hostnames to use in the errors input
+                return ctx.payload.groups.aggregations.hosts.buckets.stream().map(b -> b.key).collect(Collectors.toList());""",
+                "lang": "painless"
+              }
+            }
+          }
+        },
+        {
+          "errors": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "prod:filebeat-*"
+                ],
+                "rest_total_hits_as_int": true,
+                "template": {
+                  "source": """
+                      {
+                          "size": 0,
+                          "query": {
+                            "bool": {
+                              "filter": [
+                                {
+                                  "terms": {
+                                    "_tier": [
+                                      "{{ ctx.metadata.data_hot }}",
+                                      "{{ ctx.metadata.data_content }}"
+                                    ]
+                                  }
+                                },
+                                {
+                                  "terms": {
+                                    "labels.fix_sessionid": {{#toJson}}ctx.payload.groups_hosts._value{{/toJson}}
+                                  }
+                                },
+                                {
+                                  "range": {
+                                    "@timestamp": {
+                                      "gt": "now-{{ ctx.metadata.timeRangeValue }}{{ ctx.metadata.timeRangeUnit }}"
+                                    }
+                                  }
+                                },
+                                {
+                                    "term": {
+                                        "service.name": "CAVIAR FIX Gateway"
+                                    }
+                                },
+                                {
+                                    "term": {
+                                        "labels.fix_msg_type": "0"
+                                    }
+                                },
+                                {
+                                  "term": {
+                                    "labels.fix_event_handler_type": "{{ ctx.metadata.check_type }}"
+                                  }
+                                },
+                                {
+                                  "terms": {
+                                    "cloud.account.name": [
+                                      "hedgeserv-app-prd"
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "aggs": {
+                            "session_id": {
+                              "terms": {
+                                "field": "labels.fix_sessionid",
+                                "size": 5000
+                              },
+                              "aggs": {
+                                "data": {
+                                  "top_hits": {
+                                    "size": 1,
+                                    "_source": {
+                                      "include": [
+                                        "cloud.account.name",
+                                        "cloud.region",
+                                        "labels.client_code"
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                      }
+                      """,
+                  "lang": "mustache"
+                }
+              }
+            }
+          }
+        },
+        {
+          "sessions": {
+            "transform": {
+              "script": {
+                "source": """
+                // flatten the list of hostnames to use in the open_tickets input
+                List active = ctx.payload.errors.aggregations.session_id.buckets.stream().map(b -> b.key).collect(Collectors.toList());
+                List to_alert = [];
+                for (def session: ctx.payload.groups_hosts._value) {
+                  if (!active.contains(session)) {
+                    to_alert.add(session + "_FromAdmin");
+                  }
+                }
+                return to_alert;""",
+                "lang": "painless"
+              }
+            }
+          }
+        },
+        {
+          "open_tickets": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "sdpmt_tickets"
+                ],
+                "rest_total_hits_as_int": true,
+                "template": {
+                  "source": """
+                        {
+                          "size": 5000,
+                          "query": {
+                            "bool": {
+                              "filter": [
+                                {
+                                  "terms": {
+                                    "host.target": {{#toJson}}ctx.payload.sessions._value{{/toJson}}
+                                  }
+                                },
+                                {
+                                  "term": {
+                                    "status": "open"
+                                  }
+                                },
+                                {
+                                  "term": {
+                                    "event_type": "{{ ctx.metadata.ticket_event_type }}"
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                        """,
+                  "lang": "mustache"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "condition": {
+    "script": {
+      "source": """
+        // if we have any hosts we need to check them...
+        return ctx.payload.sessions._value.size() > 0;
+    """,
+      "lang": "painless"
+    }
+  },
+  "actions": {
+    "comment_tickets": {
+      "condition": {
+        "script": {
+          "source": "ctx.payload.to_comment.size() > 0",
+          "lang": "painless"
+        }
+      },
+      "foreach": "ctx.payload.to_comment",
+      "max_iterations": 5000,
+      "webhook": {
+        "scheme": "https",
+        "host": "elk-support.hedgeserv.com",
+        "port": 443,
+        "method": "put",
+        "path": "/api/v3/requests/{{ ctx.payload.ticket_id }}",
+        "params": {
+          "input_data": """{
+            "request": {
+                "udf_fields": {
+                    "udf_sline_96001": "{{ ctx.trigger.triggered_time }}"
+                }
+            }
+        }"""
+        },
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "technician_key": "XXXXXXXXXXXXXXXXXXX"
+        },
+        "connection_timeout_in_millis": 30000,
+        "read_timeout_millis": 30000
+      }
+    },
+    "open_tickets": {
+      "condition": {
+        "script": {
+          "source": "ctx.payload.to_open.size() > 0",
+          "lang": "painless"
+        }
+      },
+      "foreach": "ctx.payload.to_open",
+      "max_iterations": 5000,
+      "webhook": {
+        "scheme": "https",
+        "host": "elk-support.hedgeserv.com",
+        "port": 443,
+        "method": "post",
+        "path": "/api/v3/requests",
+        "params": {
+          "input_data": """{
+                "request": {
+                  "subject": "{{ ctx.metadata.event_type }} - {{ ctx.metadata.service_name }} Alert - {{ ctx.payload.session_id }}",
+                  "description": "<h3>{{ ctx.metadata.amdb_name }}</h3> <p>Session ID: {{ ctx.payload.session_id }}</p> <p>Check Type: {{ ctx.metadata.check_type }}</p> <p><a href='{{ctx.metadata.amdb_link}}'>AMDB</a></p> <p>To open the dashboard, please copy the link below</p> <p>{{ ctx.payload.dashboard_link }}</p>",
+                  "requester": {
+                     "name": "service-elastic"
+                  },
+                  "template": {
+                     "name": "Elastic Search Alerts"
+                  },
+                  "service_category": {
+                     "name": "Report an Incident"
+                  },
+                  "priority": {
+                     "name": "{{ ctx.metadata.ticket_priority }}"
+                  },
+                  "group": {
+                     "name": "{{ ctx.metadata.ticket_group }}"
+                  },
+                  "status": {
+                      "name": "Open"
+                  },
+                  "udf_fields": {
+                     "udf_sline_49837": "{{ ctx.trigger.triggered_time }}",
+                     "udf_sline_53701": "", 
+                     "udf_sline_49808": "{{ ctx.metadata.ticket_event_type }}",
+                     "udf_sline_49805": "{{ ctx.payload.key }}",
+                     "udf_sline_53703": "{{ ctx.metadata.service_name }}",
+                     "udf_sline_55201": "",
+                     "udf_sline_65102": "",
+                     "udf_sline_65104": ""
+                  },
+                  "category": {
+                     "name": "Elastic-AWS-MT"
+                  }
+                }
+              }"""
+        },
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "technician_key": "XXXXXXXXXXXXXXXXXXX"
+        }
+      }
+    }
+  },
+  "metadata": {
+    "service_name": "FIX Heartbeat Check",
+    "amdb_name": "53002 - FIX Heartbeat Check",
+    "ticket_event_type": "53002_from_admin",
+    "ticket_priority": "3 - Moderate",
+    "amdb_link": "https://hedgeservcorp.sharepoint.com/sites/GlobalTechnology/AMDB/SitePages/53002--.aspx",
+    "threshold": 5,
+    "check_type": "FromAdmin",
+    "data_content": "data_content",
+    "timeRangeUnit": "m",
+    "event_type": "53002",
+    "timeRangeValue": 5,
+    "dashboard_link": "https://287d86a4b1184182b340bd5074cdfd7e.us-east-1.aws.found.io:9243/s/information-technology/app/discover#/view/admin_53002%20-%20FIX%20FromAdmin%20heartbeat%20check?_g=(filters:!(),refreshInterval:(pause:!t,value:60000),time:(from:now-15m,to:now))&_a=(columns:!(labels.fix_sessionid,labels.fix_msg_type,labels.fix_event_handler_type),dataSource:(dataViewId:'537f0c0a-3b04-5c03-8b9c-6eee829e73f8',type:dataView),filters:!(('$state':(store:appState),meta:(alias:!n,disabled:!f,field:service.name,index:'537f0c0a-3b04-5c03-8b9c-6eee829e73f8',key:service.name,negate:!f,params:(query:'CAVIAR%20FIX%20Gateway'),type:phrase),query:(match_phrase:(service.name:'CAVIAR%20FIX%20Gateway'))),('$state':(store:appState),meta:(alias:!n,disabled:!f,field:labels.fix_sessionid,index:'537f0c0a-3b04-5c03-8b9c-6eee829e73f8',key:labels.fix_sessionid,negate:!f,params:(query:'SESSION_REPLACEMENT'),type:phrase),query:(match_phrase:(labels.fix_sessionid:'SESSION_REPLACEMENT')))),grid:(),hideChart:!f,interval:auto,query:(language:kuery,query:'labels.fix_msg_type:%20%220%22%20and%20labels.fix_event_handler_type:%20%22FromAdmin%22'),sort:!(!('@timestamp',asc)))",
+    "ticket_group": "Service Desk Operations",
+    "id": "sdpmt_53002_from_admin",
+    "data_hot": "data_hot"
+  },
+  "transform": {
+    "script": {
+      "source": """
+        // grab hostnames with open tickets and remember their IDs in a map
+        Map opened = ctx.payload.open_tickets.hits.hits.stream().collect(Collectors.toMap(h -> h._source.host.target, h -> h._source.ticket_id));
+
+        // store two lists of host buckets
+        List to_open = [];
+        List to_comment = [];
+        for (def session: ctx.payload.sessions._value) {
+          Map host = new HashMap();
+          host.key = session;
+          host.session_id = session.replace('_FromAdmin', '');
+          host.dashboard_link = ctx.metadata.dashboard_link.replace('SESSION_REPLACEMENT', host.session_id);
+          if (opened.containsKey(session)) {
+            // annotate hosts that need to be opened with ticket ID
+            host.ticket_id = opened[host.key];
+            to_comment.add(host);
+          } else {
+            // either no ticket for the host, or a closed one, open a new one
+            to_open.add(host);
+          }
+        }
+
+        // replace payload with our two lists
+        return [
+          'to_open': to_open,
+          'to_comment': to_comment
+        ];
+        """,
+      "lang": "painless"
+    }
+  }
+}
